@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Numerical Stability: Central Difference vs Newmark's Method</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+  body {
+    font-family: Arial, sans-serif;
+    margin: 20px;
+    background: #fff;
+    color: #000;
+  }
+
+  #constants, #controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 40px;
+    margin: 10px 0;
+  }
+
+  .constant, .control {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  input[type="range"] { width: 300px; }
+
+  input[type="text"] {
+    text-align: center;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 4px;
+    width: 120px;
+    background: #f9f9f9;
+    color: #333;
+    font-weight: bold;
+  }
+
+  #toggles {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 26px;
+    margin: 12px 0;
+  }
+
+  .toggle { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+
+  .swatch {
+    display: inline-block;
+    width: 26px;
+    height: 0;
+    border-top-width: 3px;
+    border-top-style: solid;
+  }
+
+  #status {
+    display: flex;
+    justify-content: center;
+    align-items: stretch;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin: 14px 0 4px;
+  }
+
+  .badge {
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 13px;
+    min-width: 230px;
+    text-align: center;
+    background: #f9f9f9;
+  }
+  .badge b { display: block; font-size: 13px; margin-bottom: 2px; color: #000; }
+  .stable   { color: #1a7f37; font-weight: bold; }
+  .unstable { color: #c62828; font-weight: bold; }
+
+  canvas {
+    max-width: 820px;
+    width: 100%;
+    height: 420px;
+    margin: 10px auto;
+    display: block;
+    background: #fff;
+  }
+  </style>
+</head>
+<body>
+
+  <!-- Readouts -->
+  <div id="constants">
+    <div class="constant">
+      <label style="font-size: 14px;">Natural period &nbsp; <i>T</i><sub>n</sub></label>
+      <input type="text" id="Tn" value="1.00 s" disabled>
+    </div>
+    <div class="constant">
+      <label style="font-size: 14px;">CDM stability limit &nbsp; (&Delta;<i>t</i>/<i>T</i><sub>n</sub> &le; 1/&pi;)</label>
+      <input type="text" id="cdmLim" value="0.318" disabled>
+    </div>
+    <div class="constant">
+      <label style="font-size: 14px;">Linear-accel. limit &nbsp; (&Delta;<i>t</i>/<i>T</i><sub>n</sub> &le; 0.551)</label>
+      <input type="text" id="laLim" value="0.551" disabled>
+    </div>
+  </div>
+
+  <!-- Sliders -->
+  <div id="controls">
+    <div class="control">
+      <label for="ratio" style="font-size: 14px;">
+        Time-step ratio &nbsp; &Delta;<i>t</i> / <i>T</i><sub>n</sub> =
+        <span id="ratio_val">0.20</span>
+      </label>
+      <input type="range" id="ratio" min="0.05" max="0.80" step="0.005" value="0.050">
+    </div>
+    <div class="control">
+      <label for="zeta" style="font-size: 14px;">
+        Damping ratio &nbsp; &zeta; =
+        <span id="zeta_val">0.00</span>
+      </label>
+      <input type="range" id="zeta" min="0" max="0.20" step="0.005" value="0">
+    </div>
+  </div>
+
+  <!-- Curve toggles -->
+  <div id="toggles">
+    <label class="toggle">
+      <input type="checkbox" id="showExact" checked>
+      <span class="swatch" style="border-top-color:#000; border-top-style:dashed;"></span>
+      Exact solution
+    </label>
+    <label class="toggle">
+      <input type="checkbox" id="showCDM" checked>
+      <span class="swatch" style="border-top-color:#1f77b4;"></span>
+      Central Difference
+    </label>
+    <label class="toggle">
+      <input type="checkbox" id="showCAA" checked>
+      <span class="swatch" style="border-top-color:#2ca02c;"></span>
+      Newmark — Constant Avg. Accel. (&beta;=&frac14;, &gamma;=&frac12;)
+    </label>
+    <label class="toggle">
+      <input type="checkbox" id="showLA" checked>
+      <span class="swatch" style="border-top-color:#d62728;"></span>
+      Newmark — Linear Accel. (&beta;=1/6, &gamma;=&frac12;)
+    </label>
+  </div>
+
+  <!-- Stability status badges -->
+  <div id="status">
+    <div class="badge"><b>Central Difference</b><span id="st_cdm">—</span></div>
+    <div class="badge"><b>Newmark — Const. Avg. Accel.</b><span id="st_caa">—</span></div>
+    <div class="badge"><b>Newmark — Linear Accel.</b><span id="st_la">—</span></div>
+  </div>
+
+  <canvas id="plot"></canvas>
+
+  <script>
+    Chart.defaults.devicePixelRatio = 2;
+    Chart.defaults.font.size = 14;
+
+    const canvas = document.getElementById("plot");
+    const ctx = canvas.getContext("2d");
+
+    const TWO_PI = 2 * Math.PI;
+    const T_END  = 10;            // 10 natural periods (Tn = 1 s)
+    const Tn     = 1.0;
+    const WN     = TWO_PI / Tn;   // natural circular frequency
+    const CDM_LIMIT = 1 / Math.PI;   // 0.318
+    const LA_LIMIT  = 0.551;
+    const Y_CAP = 1e6;            // stop integrating once it clearly diverges
+
+    // System: m u'' + c u' + k u = 0, free vibration, u0 = 1, v0 = 0
+    function sysProps(zeta) {
+      const m = 1.0;
+      const k = WN * WN;
+      const c = 2 * zeta * WN * m;
+      return { m, c, k };
+    }
+
+    // ---- Exact free-vibration response (dense, smooth) ----
+    function exactSeries(zeta) {
+      const wd = WN * Math.sqrt(1 - zeta * zeta);
+      const out = [];
+      const dt = 0.01;
+      for (let t = 0; t <= T_END + 1e-9; t += dt) {
+        let u;
+        if (zeta === 0) {
+          u = Math.cos(WN * t);
+        } else {
+          u = Math.exp(-zeta * WN * t) *
+              (Math.cos(wd * t) + (zeta / Math.sqrt(1 - zeta * zeta)) * Math.sin(wd * t));
+        }
+        out.push({ x: t, y: u });
+      }
+      return out;
+    }
+
+    // ---- Central Difference Method ----
+    function cdmSeries(zeta, dt) {
+      const { m, c, k } = sysProps(zeta);
+      const u0 = 1.0, v0 = 0.0, p = 0.0;
+      const a0  = (p - c * v0 - k * u0) / m;
+      const um1 = u0 - dt * v0 + 0.5 * dt * dt * a0;
+      const kh  = m / (dt * dt) + c / (2 * dt);
+      const aa  = m / (dt * dt) - c / (2 * dt);
+      const bb  = k - 2 * m / (dt * dt);
+
+      const out = [{ x: 0, y: u0 }];
+      let uPrev = um1, uCur = u0, i = 1;
+      while (i * dt <= T_END + 1e-9) {
+        const ph = p - aa * uPrev - bb * uCur;
+        const uNext = ph / kh;
+        out.push({ x: i * dt, y: uNext });
+        if (!isFinite(uNext) || Math.abs(uNext) > Y_CAP) break;
+        uPrev = uCur; uCur = uNext; i++;
+      }
+      return out;
+    }
+
+    // ---- Newmark's Method (general beta, gamma) ----
+    function newmarkSeries(zeta, dt, beta, gamma) {
+      const { m, c, k } = sysProps(zeta);
+      let u = 1.0, v = 0.0;
+      let a = (0 - c * v - k * u) / m;
+      const kh = k + (gamma / (beta * dt)) * c + (1 / (beta * dt * dt)) * m;
+      const A  = (1 / (beta * dt)) * m + (gamma / beta) * c;
+      const B  = (1 / (2 * beta)) * m + dt * (gamma / (2 * beta) - 1) * c;
+
+      const out = [{ x: 0, y: u }];
+      let i = 1;
+      while (i * dt <= T_END + 1e-9) {
+        const dpHat = 0 + A * v + B * a;       // applied load increment is 0
+        const du = dpHat / kh;
+        const dv = (gamma / (beta * dt)) * du - (gamma / beta) * v + dt * (1 - gamma / (2 * beta)) * a;
+        const da = (1 / (beta * dt * dt)) * du - (1 / (beta * dt)) * v - (1 / (2 * beta)) * a;
+        u += du; v += dv; a += da;
+        out.push({ x: i * dt, y: u });
+        if (!isFinite(u) || Math.abs(u) > Y_CAP) break;
+        i++;
+      }
+      return out;
+    }
+
+    // Axes through the origin
+    const axesLines = {
+      id: 'axesLines',
+      afterDraw(chart) {
+        const { ctx, chartArea: { left, right, top, bottom }, scales: { x, y } } = chart;
+        ctx.save();
+        ctx.strokeStyle = 'black'; ctx.lineWidth = 1.5;
+        const yZero = y.getPixelForValue(0);
+        if (yZero >= top && yZero <= bottom) { ctx.beginPath(); ctx.moveTo(left, yZero); ctx.lineTo(right, yZero); ctx.stroke(); }
+        const xZero = x.getPixelForValue(0);
+        if (xZero >= left && xZero <= right) { ctx.beginPath(); ctx.moveTo(xZero, top); ctx.lineTo(xZero, bottom); ctx.stroke(); }
+        ctx.restore();
+      }
+    };
+
+    const chart = new Chart(ctx, {
+      type: "line",
+      data: {
+        datasets: [
+          { label: "Exact solution",
+            data: [], borderColor: "#000", borderWidth: 1.5,
+            borderDash: [6, 6], pointRadius: 0, fill: false, parsing: false },
+          { label: "Central Difference",
+            data: [], borderColor: "#1f77b4", borderWidth: 1.8,
+            pointRadius: 0, fill: false, parsing: false },
+          { label: "Newmark — Constant Avg. Accel.",
+            data: [], borderColor: "#2ca02c", borderWidth: 1.8,
+            pointRadius: 0, fill: false, parsing: false },
+          { label: "Newmark — Linear Accel.",
+            data: [], borderColor: "#d62728", borderWidth: 1.8,
+            pointRadius: 0, fill: false, parsing: false }
+        ]
+      },
+      options: {
+        responsive: true,
+        animation: false,
+        scales: {
+          x: {
+            type: "linear", min: 0, max: T_END,
+            ticks: { color: "black", stepSize: 1 },
+            grid: { color: "#eee", drawBorder: false },
+            title: { display: true, text: "Normalized time  𝑡 / 𝑇ₙ", color: "black", font: { size: 16 } }
+          },
+          y: {
+            min: -3, max: 3,
+            ticks: { color: "black" },
+            grid: { color: "#eee", drawBorder: false },
+            title: { display: true, text: "Displacement  𝑢 / 𝑢₀", color: "black", font: { size: 16 } }
+          }
+        },
+        plugins: {
+          legend: { display: false }
+        },
+        layout: { padding: 10 }
+      },
+      plugins: [axesLines]
+    });
+
+    function statusHTML(ratio, limit, alwaysStable) {
+      const stable = alwaysStable || ratio <= limit + 1e-9;
+      if (alwaysStable) {
+        return '<span class="stable">Stable — unconditionally</span>';
+      }
+      return stable
+        ? `<span class="stable">Stable</span> (Δt/Tₙ = ${ratio.toFixed(3)} ≤ ${limit.toFixed(3)})`
+        : `<span class="unstable">Unstable</span> (Δt/Tₙ = ${ratio.toFixed(3)} > ${limit.toFixed(3)})`;
+    }
+
+    function updatePlot() {
+      const ratio = parseFloat(document.getElementById("ratio").value);
+      const zeta  = parseFloat(document.getElementById("zeta").value);
+      document.getElementById("ratio_val").textContent = ratio.toFixed(2);
+      document.getElementById("zeta_val").textContent  = zeta.toFixed(2);
+
+      const dt = ratio * Tn;
+
+      chart.data.datasets[0].data = exactSeries(zeta);
+      chart.data.datasets[1].data = cdmSeries(zeta, dt);
+      chart.data.datasets[2].data = newmarkSeries(zeta, dt, 0.25, 0.5);
+      chart.data.datasets[3].data = newmarkSeries(zeta, dt, 1 / 6, 0.5);
+
+      chart.setDatasetVisibility(0, document.getElementById("showExact").checked);
+      chart.setDatasetVisibility(1, document.getElementById("showCDM").checked);
+      chart.setDatasetVisibility(2, document.getElementById("showCAA").checked);
+      chart.setDatasetVisibility(3, document.getElementById("showLA").checked);
+
+      // Status badges
+      document.getElementById("st_cdm").innerHTML = statusHTML(ratio, CDM_LIMIT, false);
+      document.getElementById("st_caa").innerHTML = statusHTML(ratio, 0, true);
+      document.getElementById("st_la").innerHTML  = statusHTML(ratio, LA_LIMIT, false);
+
+      chart.update();
+    }
+
+    document.querySelectorAll("input").forEach(el => el.addEventListener("input", updatePlot));
+    updatePlot();
+  </script>
+</body>
+</html>
