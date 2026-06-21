@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Mode Shapes of an Undamped Shear Building</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+  body { font-family: Arial, sans-serif; margin: 20px; background: #fff; color: #000; }
+
+  h2.fig-title { text-align: center; font-size: 18px; font-weight: bold; margin: 0 0 4px; }
+  p.fig-sub { text-align: center; font-size: 14px; color: #333; margin: 0 0 16px; }
+
+  #controls { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 34px; margin: 10px 0; }
+  .control { display: flex; flex-direction: column; align-items: center; }
+  input[type="range"] { width: 240px; }
+
+  p.note { text-align: center; font-size: 12.5px; color: #666; font-style: italic; margin: 6px auto 2px; max-width: 760px; }
+
+  #modepanels { display: flex; justify-content: center; align-items: flex-start; flex-wrap: wrap; gap: 14px; margin-top: 14px; }
+  .modepanel { display: flex; flex-direction: column; align-items: center; }
+  .modepanel canvas { width: 150px; height: 300px; display: block; }
+  .modecap { text-align: center; font-size: 12.5px; margin-top: 4px; line-height: 1.35; }
+  .modecap b { font-size: 13px; }
+  </style>
+</head>
+<body>
+
+  <h2 class="fig-title">Mode Shapes of an Undamped Shear Building</h2>
+  <p class="fig-sub">
+    Each natural mode is a distinct deformation pattern. Set the number of storeys to see how the
+    mode shapes &mdash; and the number of internal nodes &mdash; change.
+  </p>
+
+  <div id="controls">
+    <div class="control">
+      <label for="N" style="font-size:14px;">Number of storeys &nbsp; <i>N</i> = <span id="N_val">3</span></label>
+      <input type="range" id="N" min="2" max="5" step="1" value="3">
+    </div>
+    <div class="control">
+      <label for="mass" style="font-size:14px;">Floor mass &nbsp; <i>m</i> = <span id="mass_val">1.50</span> kg</label>
+      <input type="range" id="mass" min="0.5" max="3.0" step="0.05" value="1.50">
+    </div>
+    <div class="control">
+      <label for="stiff" style="font-size:14px;">Storey stiffness &nbsp; <i>k</i> = <span id="stiff_val">2400</span> N/m</label>
+      <input type="range" id="stiff" min="600" max="4000" step="50" value="2400">
+    </div>
+  </div>
+
+  <p class="note">
+    For this uniform shear building the mode <i>shapes</i> depend only on <i>N</i> (the mass/stiffness
+    distribution), not on the magnitudes of <i>m</i> and <i>k</i> &mdash; changing <i>m</i> or <i>k</i> rescales the
+    natural frequencies but leaves the shapes unchanged.
+  </p>
+
+  <div id="modepanels"></div>
+
+  <script>
+    const TWO_PI = 2 * Math.PI;
+    const MODE_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e"];
+
+    // ---------- Symmetric eigenproblem via Jacobi rotations ----------
+    function jacobiEig(Ain, n) {
+      const A = Ain.map(r => r.slice());
+      const V = Array.from({length:n}, (_,i) => Array.from({length:n}, (_,j) => i===j?1:0));
+      for (let sweep = 0; sweep < 100; sweep++) {
+        let off = 0;
+        for (let p = 0; p < n; p++)
+          for (let q = p+1; q < n; q++) off += A[p][q]*A[p][q];
+        if (off < 1e-20) break;
+        for (let p = 0; p < n; p++) {
+          for (let q = p+1; q < n; q++) {
+            if (Math.abs(A[p][q]) < 1e-18) continue;
+            const theta = (A[q][q] - A[p][p]) / (2 * A[p][q]);
+            let t = (theta === 0) ? 1
+                  : Math.sign(theta) / (Math.abs(theta) + Math.sqrt(theta*theta + 1));
+            const c = 1 / Math.sqrt(t*t + 1);
+            const s = t * c;
+            for (let i = 0; i < n; i++) { const aip=A[i][p], aiq=A[i][q]; A[i][p]=c*aip-s*aiq; A[i][q]=s*aip+c*aiq; }
+            for (let i = 0; i < n; i++) { const api=A[p][i], aqi=A[q][i]; A[p][i]=c*api-s*aqi; A[q][i]=s*api+c*aqi; }
+            for (let i = 0; i < n; i++) { const vip=V[i][p], viq=V[i][q]; V[i][p]=c*vip-s*viq; V[i][q]=s*vip+c*viq; }
+          }
+        }
+      }
+      return { values: A.map((r,i) => r[i]), vectors: V };
+    }
+
+    function stiffnessMatrix(N, k) {
+      const K = Array.from({length:N}, () => Array(N).fill(0));
+      for (let i = 0; i < N; i++) {
+        K[i][i] += k;
+        if (i + 1 < N) { K[i][i] += k; K[i][i+1] -= k; K[i+1][i] -= k; }
+      }
+      return K;
+    }
+
+    // returns sorted omega[] and normalized mode shapes phi[mode][floor] (max |comp| = 1, positive)
+    function solveModes(N, m, k) {
+      const K = stiffnessMatrix(N, k);
+      const { values, vectors } = jacobiEig(K, N);
+      const idx = values.map((_, j) => j).sort((a, b) => values[a] - values[b]);
+      const omega = [], phi = [];
+      for (const j of idx) {
+        omega.push(Math.sqrt(Math.max(values[j], 0) / m));
+        const vec = [];
+        for (let i = 0; i < N; i++) vec.push(vectors[i][j]);
+        // normalize so the largest-magnitude component is +1
+        let jm = 0;
+        for (let i = 1; i < N; i++) if (Math.abs(vec[i]) > Math.abs(vec[jm])) jm = i;
+        const ref = vec[jm] || 1;
+        for (let i = 0; i < N; i++) vec[i] /= ref;
+        phi.push(vec);
+      }
+      return { omega, phi };
+    }
+
+    // ---------- draw one mode shape into a canvas ----------
+    function drawMode(ctx, W, H, shape, color, modeNum) {
+      ctx.clearRect(0, 0, W, H);
+      const N = shape.length;
+      const cx = W / 2, marginTop = 18, marginBottom = 30;
+      const yBase = H - marginBottom, yRoof = marginTop;
+      const storyH = (yBase - yRoof) / N;
+      const scale = W / 2 - 16;                 // shape is normalized to max |comp| = 1
+      const floorY = i => yBase - (i + 1) * storyH;
+
+      // ground + hatching
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.moveTo(cx - 40, yBase); ctx.lineTo(cx + 40, yBase); ctx.stroke();
+      ctx.strokeStyle = '#aaa'; ctx.lineWidth = 1;
+      for (let xx = cx - 36; xx <= cx + 40; xx += 9) {
+        ctx.beginPath(); ctx.moveTo(xx, yBase); ctx.lineTo(xx - 6, yBase + 6); ctx.stroke();
+      }
+
+      // undeformed reference
+      ctx.strokeStyle = '#bbb'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.moveTo(cx, yBase); ctx.lineTo(cx, yRoof); ctx.stroke();
+      ctx.setLineDash([]);
+
+      // deformed node positions
+      const pts = [{ x: cx, y: yBase }];
+      for (let i = 0; i < N; i++) pts.push({ x: cx + shape[i] * scale, y: floorY(i) });
+
+      // spine
+      ctx.strokeStyle = color; ctx.lineWidth = 2.4;
+      ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.stroke();
+
+      // floor nodes
+      ctx.fillStyle = color;
+      for (let i = 0; i < N; i++) { ctx.beginPath(); ctx.arc(pts[i+1].x, pts[i+1].y, 3.2, 0, TWO_PI); ctx.fill(); }
+    }
+
+    // ---------- build / refresh panels ----------
+    const panels = document.getElementById("modepanels");
+    let lastN = -1;
+    let ctxs = [];
+
+    function rebuildPanels(N) {
+      panels.innerHTML = "";
+      ctxs = [];
+      for (let n = 0; n < N; n++) {
+        const wrap = document.createElement("div");
+        wrap.className = "modepanel";
+        const cv = document.createElement("canvas");
+        cv.width = 300; cv.height = 600;          // 2x for crispness (CSS 150x300)
+        const cap = document.createElement("div");
+        cap.className = "modecap";
+        cap.id = "cap" + n;
+        wrap.appendChild(cv); wrap.appendChild(cap);
+        panels.appendChild(wrap);
+        const ctx = cv.getContext("2d");
+        ctx.setTransform(cv.width / 150, 0, 0, cv.height / 300, 0, 0);
+        ctxs.push(ctx);
+      }
+    }
+
+    function nodeCount(shape) {
+      // internal sign changes along the height (number of nodes)
+      let c = 0;
+      for (let i = 1; i < shape.length; i++) if (shape[i] * shape[i-1] < 0) c++;
+      return c;
+    }
+
+    function update() {
+      const N = parseInt(document.getElementById("N").value);
+      const m = parseFloat(document.getElementById("mass").value);
+      const k = parseFloat(document.getElementById("stiff").value);
+
+      document.getElementById("N_val").textContent     = N;
+      document.getElementById("mass_val").textContent  = m.toFixed(2);
+      document.getElementById("stiff_val").textContent = k.toFixed(0);
+
+      if (N !== lastN) { rebuildPanels(N); lastN = N; }
+
+      const { omega, phi } = solveModes(N, m, k);
+      for (let n = 0; n < N; n++) {
+        drawMode(ctxs[n], 150, 300, phi[n], MODE_COLORS[n], n + 1);
+        const Tn = TWO_PI / omega[n];
+        const nodes = nodeCount(phi[n]);
+        document.getElementById("cap" + n).innerHTML =
+          `<b style="color:${MODE_COLORS[n]}">Mode ${n+1}</b><br>` +
+          `&omega;<sub>${n+1}</sub> = ${omega[n].toFixed(2)} rad/s<br>` +
+          `T<sub>${n+1}</sub> = ${Tn.toFixed(3)} s<br>` +
+          `<span style="color:#666">${nodes} internal node${nodes === 1 ? "" : "s"}</span>`;
+      }
+    }
+
+    document.querySelectorAll("#controls input").forEach(el => {
+      el.addEventListener("input", update);
+      el.addEventListener("change", update);
+    });
+    update();
+  </script>
+</body>
+</html>
