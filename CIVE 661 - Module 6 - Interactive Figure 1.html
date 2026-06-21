@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Rectangular Pulse: Forced Phase + Free Phase = Combined Response</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+  body {
+    font-family: Arial, sans-serif;
+    margin: 20px;
+    background: #fff;
+    color: #000;
+  }
+
+  #constants, #controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 40px;
+    margin: 10px 0;
+  }
+
+  .constant, .control {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  input[type="range"] { width: 320px; }
+
+  input[type="text"] {
+    text-align: center;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 4px;
+    width: 120px;
+    background: #f9f9f9;
+    color: #333;
+    font-weight: bold;
+  }
+
+  #toggles {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 30px;
+    margin: 12px 0;
+  }
+
+  .toggle { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+
+  .swatch {
+    display: inline-block;
+    width: 26px;
+    height: 0;
+    border-top-width: 3px;
+    border-top-style: solid;
+  }
+
+  canvas {
+    max-width: 820px;
+    width: 100%;
+    height: 420px;
+    margin: 10px auto;
+    display: block;
+    background: #fff;
+  }
+  </style>
+</head>
+<body>
+  <!-- Readouts -->
+  <div id="constants">
+    <div class="constant">
+      <label style="font-size: 14px;">Deformation factor <i>R</i><sub>d</sub> = max |𝑢|/(𝑢<sub>st</sub>)ₒ</label>
+      <input type="text" id="Rd" value="-" disabled>
+    </div>
+    <div class="constant">
+      <label style="font-size: 14px;">Peak displacement occurs</label>
+      <input type="text" id="peakWhen" value="-" disabled style="width:230px;">
+    </div>
+  </div>
+
+  <!-- Slider -->
+  <div id="controls">
+    <div class="control">
+      <label for="ratio" style="font-size: 14px;">
+        Pulse duration ratio &nbsp; <i>t</i><sub>d</sub> / <i>T</i><sub>n</sub> =
+        <span id="ratio_val">0.50</span>
+      </label>
+      <input type="range" id="ratio" min="0.1" max="3.0" step="0.01" value="0.50">
+    </div>
+  </div>
+
+  <!-- Curve toggles -->
+  <div id="toggles">
+    <label class="toggle">
+      <input type="checkbox" id="showForced" checked>
+      <span class="swatch" style="border-top-color:#1f77b4; border-top-style:dashed;"></span>
+      Forced vibration (Phase I, if load stayed on)
+    </label>
+    <label class="toggle">
+      <input type="checkbox" id="showFree" checked>
+      <span class="swatch" style="border-top-color:#2ca02c;"></span>
+      Free vibration (Phase II, after pulse)
+    </label>
+    <label class="toggle">
+      <input type="checkbox" id="showTotal" checked>
+      <span class="swatch" style="border-top-color:red;"></span>
+      Combined (actual pulse response)
+    </label>
+  </div>
+
+  <canvas id="plot"></canvas>
+
+  <script>
+    Chart.defaults.devicePixelRatio = 2;
+    Chart.defaults.font.size = 14;
+
+    const canvas = document.getElementById("plot");
+    const ctx = canvas.getContext("2d");
+
+    const TWO_PI = 2 * Math.PI;
+    let tau_d = 0.5;     // current pulse duration ratio td/Tn (used by marker plugin)
+    let xMax  = 4;       // current x-axis max in t/Tn
+
+    // All quantities normalized: U = u/(ust)o , tau = t/Tn.
+    // Phase I  (forced, 0<=tau<=td):  U = 1 - cos(2*pi*tau)
+    // End-of-pulse conditions:        U(td)  = 1 - cos(2*pi*td)
+    //                                 U'(td) (in tau) imparts free-vib velocity term sin(2*pi*td)
+    // Phase II (free, tau>td):        U = (1-cos2pi*td) cos[2pi(tau-td)] + sin(2pi*td) sin[2pi(tau-td)]
+    function forcedU(tau) {
+      return 1 - Math.cos(TWO_PI * tau);
+    }
+    function freeU(tau, td) {
+      const Utd = 1 - Math.cos(TWO_PI * td);
+      const Vtd = Math.sin(TWO_PI * td);          // = (u_dot(td)/wn)/(ust)o
+      const ph  = TWO_PI * (tau - td);
+      return Utd * Math.cos(ph) + Vtd * Math.sin(ph);
+    }
+
+    function computeSeries(td) {
+      const dt = 0.005;
+      xMax = Math.max(4, Math.ceil(td) + 3);
+      const forced = [], free = [], total = [];
+      let peakAbs = 0, peakTau = 0;
+      for (let tau = 0; tau <= xMax + 1e-9; tau += dt) {
+        const uf = forcedU(tau);
+        forced.push({ x: tau, y: uf });
+
+        let uTot;
+        if (tau <= td) {
+          uTot = uf;
+        } else {
+          const ufree = freeU(tau, td);
+          free.push({ x: tau, y: ufree });
+          uTot = ufree;
+        }
+        total.push({ x: tau, y: uTot });
+
+        if (Math.abs(uTot) > peakAbs) { peakAbs = Math.abs(uTot); peakTau = tau; }
+      }
+      // ensure free curve starts exactly at td for continuity
+      free.unshift({ x: td, y: forcedU(td) });
+      return { forced, free, total, Rd: peakAbs, peakTau };
+    }
+
+    // Plugin: axes through origin + static line (U=1) + pulse-end vertical line
+    const markers = {
+      id: 'markers',
+      afterDraw(chart) {
+        const { ctx, chartArea: { left, right, top, bottom }, scales: { x, y } } = chart;
+        ctx.save();
+        // axes
+        ctx.strokeStyle = 'black'; ctx.lineWidth = 1.5;
+        const yZero = y.getPixelForValue(0);
+        if (yZero >= top && yZero <= bottom) { ctx.beginPath(); ctx.moveTo(left, yZero); ctx.lineTo(right, yZero); ctx.stroke(); }
+        const xZero = x.getPixelForValue(0);
+        if (xZero >= left && xZero <= right) { ctx.beginPath(); ctx.moveTo(xZero, top); ctx.lineTo(xZero, bottom); ctx.stroke(); }
+
+        // static deflection line U=1
+        ctx.strokeStyle = '#999'; ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
+        const yStat = y.getPixelForValue(1);
+        ctx.beginPath(); ctx.moveTo(left, yStat); ctx.lineTo(right, yStat); ctx.stroke();
+
+        // pulse-end vertical line at tau = td
+        const xEnd = x.getPixelForValue(tau_d);
+        if (xEnd >= left && xEnd <= right) {
+          ctx.strokeStyle = '#555'; ctx.lineWidth = 1.5; ctx.setLineDash([7, 5]);
+          ctx.beginPath(); ctx.moveTo(xEnd, top); ctx.lineTo(xEnd, bottom); ctx.stroke();
+          // label
+          ctx.setLineDash([]); ctx.fillStyle = '#555'; ctx.font = '12px Arial'; ctx.textAlign = 'center';
+          ctx.fillText('pulse ends  (t = t_d)', xEnd, top + 12);
+        }
+        ctx.restore();
+      }
+    };
+
+    const init = computeSeries(tau_d);
+
+    const chart = new Chart(ctx, {
+      type: "line",
+      data: {
+        datasets: [
+          { label: "Forced vibration (Phase I, extended)",
+            data: init.forced, borderColor: "#1f77b4", borderWidth: 1.5,
+            borderDash: [6, 4], pointRadius: 0, fill: false, parsing: false },
+          { label: "Free vibration (Phase II)",
+            data: init.free, borderColor: "#2ca02c", borderWidth: 1.5,
+            pointRadius: 0, fill: false, parsing: false },
+          { label: "Combined (actual pulse response)",
+            data: init.total, borderColor: "red", borderWidth: 2.5,
+            pointRadius: 0, fill: false, parsing: false }
+        ]
+      },
+      options: {
+        responsive: true,
+        animation: false,
+        scales: {
+          x: {
+            type: "linear", min: 0, max: 4,
+            ticks: { color: "black", stepSize: 0.5 },
+            grid: { color: "#eee", drawBorder: false },
+            title: { display: true, text: "Normalized time  𝑡 / 𝑇ₙ", color: "black", font: { size: 16 } }
+          },
+          y: {
+            min: -2.3, max: 2.3,
+            ticks: { color: "black" },
+            grid: { color: "#eee", drawBorder: false },
+            title: { display: true, text: "Normalized displacement  𝑢 / (𝑢ₛₜ)ₒ", color: "black", font: { size: 16 } }
+          }
+        },
+        plugins: {
+          legend: { display: true, position: 'top',
+            labels: { color: 'black', usePointStyle: false, boxWidth: 40, boxHeight: 1 } }
+        },
+        layout: { padding: 10 }
+      },
+      plugins: [markers]
+    });
+
+    function updatePlot() {
+      tau_d = parseFloat(document.getElementById("ratio").value);
+      document.getElementById("ratio_val").textContent = tau_d.toFixed(2);
+
+      const s = computeSeries(tau_d);
+      chart.data.datasets[0].data = s.forced;
+      chart.data.datasets[1].data = s.free;
+      chart.data.datasets[2].data = s.total;
+
+      chart.setDatasetVisibility(0, document.getElementById("showForced").checked);
+      chart.setDatasetVisibility(1, document.getElementById("showFree").checked);
+      chart.setDatasetVisibility(2, document.getElementById("showTotal").checked);
+
+      chart.options.scales.x.max = xMax;
+
+      // Readouts
+      document.getElementById("Rd").value = s.Rd.toFixed(2);
+      const afterPulse = s.peakTau > tau_d + 1e-6;
+      document.getElementById("peakWhen").value =
+        afterPulse ? "after pulse (free vibration)" : "during pulse (forced phase)";
+
+      chart.update();
+    }
+
+    document.querySelectorAll("input").forEach(el => el.addEventListener("input", updatePlot));
+    updatePlot();
+  </script>
+</body>
+</html>
