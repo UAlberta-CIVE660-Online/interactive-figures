@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Number of Modes Required: Modal Contribution Factors and Truncation Error</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+  body { font-family: Arial, sans-serif; margin: 20px; background: #fff; color: #000; }
+
+  h2.fig-title { text-align: center; font-size: 18px; font-weight: bold; margin: 0 0 4px; }
+  p.fig-sub { text-align: center; font-size: 14px; color: #333; margin: 0 0 16px; max-width: 1000px; margin-left:auto; margin-right:auto; }
+
+  #constants, #controls {
+    display: flex; justify-content: center; align-items: center;
+    flex-wrap: wrap; gap: 30px; margin: 10px 0;
+  }
+  .constant, .control { display: flex; flex-direction: column; align-items: center; }
+  input[type="range"] { width: 220px; }
+  select {
+    text-align: center; border: 1px solid #ccc; border-radius: 4px; padding: 4px 6px;
+    background: #f9f9f9; color: #333; font-weight: bold; font-size: 14px;
+  }
+
+  #readout {
+    display: flex; justify-content: center; flex-wrap: wrap; gap: 16px; margin: 14px 0 4px;
+  }
+  .stat {
+    border: 1px solid #ccc; border-radius: 8px; padding: 8px 18px; text-align: center; background: #f9f9f9; min-width: 150px;
+  }
+  .stat b { display: block; font-size: 22px; margin-bottom: 2px; }
+  .stat span { font-size: 12px; color: #555; }
+  .stat.err b { color: #c0392b; }
+  .stat.cap b { color: #1f3b73; }
+
+  #plots {
+    display: flex; justify-content: center; align-items: flex-start;
+    flex-wrap: wrap; gap: 24px; margin-top: 12px;
+  }
+  .plotbox { flex: 1 1 420px; max-width: 520px; }
+  .plotbox h3 { text-align: center; font-size: 15px; margin: 0 0 6px; }
+  .legend-hint { text-align: center; font-size: 12px; font-style: italic; color: #666; margin: 6px 0 0; }
+  .chart-wrap { position: relative; width: 100%; height: 360px; }
+
+  .buildingbox { flex: 0 0 270px; max-width: 270px; }
+  .building-wrap { position: relative; width: 270px; height: 360px; margin: 0 auto; }
+  #plotBldg { width: 270px; height: 360px; }
+  #bldgLegend { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 14px; margin-top: 8px; font-size: 12px; }
+  .bl { display: flex; align-items: center; gap: 5px; }
+  .sw { display: inline-block; width: 20px; height: 0; border-top-width: 3px; border-top-style: solid; }
+  canvas { display: block; background: #fff; }
+  </style>
+</head>
+<body>
+
+  <h2 class="fig-title">How Many Modes Are Enough? &mdash; Modal Contribution Factors and Truncation Error</h2>
+  <p class="fig-sub">
+    Under a static force distribution <b>S</b>, the response of each floor is built from contributions of all <i>N</i>
+    modes. Each mode&rsquo;s share is its <b>modal contribution factor</b> r&#772;<sub>n</sub> (the factors sum to 1).
+    Choose how many modes <i>J</i> to include: the bars below highlight the modes kept, and the truncation error
+    e<sub>J</sub> = 1 &minus; &Sigma;<sub>n&le;J</sub> r&#772;<sub>n</sub> shows what is left out. Watch the approximate
+    deflected shape converge to the exact one as <i>J</i> grows.
+  </p>
+
+  <div id="controls">
+    <div class="control">
+      <label for="N" style="font-size:14px;">Number of storeys &nbsp; <i>N</i> = <span id="N_val">4</span></label>
+      <input type="range" id="N" min="2" max="5" step="1" value="4">
+    </div>
+    <div class="control">
+      <label for="J" style="font-size:14px;">Modes included &nbsp; <i>J</i> = <span id="J_val">1</span></label>
+      <input type="range" id="J" min="1" max="5" step="1" value="1">
+    </div>
+  </div>
+
+  <div id="constants">
+    <div class="constant">
+      <label for="dist" style="font-size:14px;">Force distribution, <b>S</b></label>
+      <select id="dist">
+        <option value="top">Top floor only</option>
+        <option value="uniform" selected>Uniform (all floors)</option>
+        <option value="triangular">Triangular (&uarr; with height)</option>
+        <option value="snap">Localized (mid floor)</option>
+      </select>
+    </div>
+    <div class="constant">
+      <label for="floor" style="font-size:14px;">Response: displacement of</label>
+      <select id="floor"></select>
+    </div>
+  </div>
+
+  <div id="readout">
+    <div class="stat cap"><b id="capVal">--</b><span>captured by <i id="capJ">J</i> modes&nbsp;(&Sigma; r&#772;<sub>n</sub>)</span></div>
+    <div class="stat err"><b id="errVal">--</b><span>truncation error&nbsp; e<sub>J</sub></span></div>
+  </div>
+
+  <div id="plots">
+    <div class="plotbox">
+      <h3>Modal contribution factors &nbsp;<span style="font-weight:normal;color:#555;">r&#772;<sub>n</sub> and running sum</span></h3>
+      <div class="chart-wrap"><canvas id="plotBars"></canvas></div>
+      <p class="legend-hint">Solid bars = modes included (n &le; J); faded bars = omitted. Line = cumulative &Sigma; r&#772;<sub>n</sub>.</p>
+    </div>
+    <div class="plotbox buildingbox">
+      <h3>Deflected shape under static <b>S</b></h3>
+      <div class="building-wrap"><canvas id="plotBldg" width="540" height="720"></canvas></div>
+      <div id="bldgLegend">
+        <div class="bl"><span class="sw" style="border-top-color:#bbb;border-top-style:dashed;"></span>Exact (all N modes)</div>
+        <div class="bl"><span class="sw" style="border-top-color:#1f3b73;"></span>Using J modes</div>
+      </div>
+      <p class="legend-hint">Red ring = observed floor. The gap is the truncation error.</p>
+    </div>
+  </div>
+
+  <script>
+    Chart.defaults.devicePixelRatio = 2;
+    Chart.defaults.font.size = 13;
+    const TWO_PI = 2 * Math.PI;
+    const MODE_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e"];
+    let state = null;
+
+    // ---------- linear algebra ----------
+    function jacobiEig(Ain, n) {
+      const A = Ain.map(r => r.slice());
+      const V = Array.from({length:n}, (_,i) => Array.from({length:n}, (_,j) => i===j?1:0));
+      for (let sweep = 0; sweep < 100; sweep++) {
+        let off = 0;
+        for (let p = 0; p < n; p++) for (let q = p+1; q < n; q++) off += A[p][q]*A[p][q];
+        if (off < 1e-20) break;
+        for (let p = 0; p < n; p++) for (let q = p+1; q < n; q++) {
+          if (Math.abs(A[p][q]) < 1e-18) continue;
+          const theta = (A[q][q] - A[p][p]) / (2 * A[p][q]);
+          let t = (theta === 0) ? 1 : Math.sign(theta)/(Math.abs(theta)+Math.sqrt(theta*theta+1));
+          const c = 1/Math.sqrt(t*t+1), s = t*c;
+          for (let i=0;i<n;i++){const aip=A[i][p],aiq=A[i][q];A[i][p]=c*aip-s*aiq;A[i][q]=s*aip+c*aiq;}
+          for (let i=0;i<n;i++){const api=A[p][i],aqi=A[q][i];A[p][i]=c*api-s*aqi;A[q][i]=s*api+c*aqi;}
+          for (let i=0;i<n;i++){const vip=V[i][p],viq=V[i][q];V[i][p]=c*vip-s*viq;V[i][q]=s*vip+c*viq;}
+        }
+      }
+      return { values: A.map((r,i)=>r[i]), vectors: V };
+    }
+    function stiffnessMatrix(N, k) {
+      const K = Array.from({length:N}, () => Array(N).fill(0));
+      for (let i=0;i<N;i++){ K[i][i]+=k; if(i+1<N){K[i][i]+=k;K[i][i+1]-=k;K[i+1][i]-=k;} }
+      return K;
+    }
+    function solveModes(N, m, k) {
+      const K = stiffnessMatrix(N, k);
+      const { values, vectors } = jacobiEig(K, N);
+      const idx = values.map((_,j)=>j).sort((a,b)=>values[a]-values[b]);
+      const omega=[], phi=[];
+      for (const j of idx) {
+        omega.push(Math.sqrt(Math.max(values[j],0)/m));
+        const vec=[]; for (let i=0;i<N;i++) vec.push(vectors[i][j]);
+        if (vec[N-1]<0) for (let i=0;i<N;i++) vec[i]=-vec[i];
+        phi.push(vec);
+      }
+      return { omega, phi, K };
+    }
+    // solve K x = b (small system, Gaussian elimination)
+    function solveLinear(K, b) {
+      const N=b.length, A=K.map(r=>r.slice()), x=b.slice();
+      for (let c=0;c<N;c++){
+        let piv=c; for (let r=c+1;r<N;r++) if (Math.abs(A[r][c])>Math.abs(A[piv][c])) piv=r;
+        [A[c],A[piv]]=[A[piv],A[c]]; [x[c],x[piv]]=[x[piv],x[c]];
+        for (let r=c+1;r<N;r++){ const f=A[r][c]/A[c][c]; for (let cc=c;cc<N;cc++) A[r][cc]-=f*A[c][cc]; x[r]-=f*x[c]; }
+      }
+      for (let r=N-1;r>=0;r--){ let s=x[r]; for (let cc=r+1;cc<N;cc++) s-=A[r][cc]*x[cc]; x[r]=s/A[r][r]; }
+      return x;
+    }
+    function spatialDist(kind, N) {
+      const S = Array(N).fill(0);
+      if (kind==="top") S[N-1]=1;
+      else if (kind==="uniform") for (let i=0;i<N;i++) S[i]=1;
+      else if (kind==="triangular") for (let i=0;i<N;i++) S[i]=(i+1)/N;
+      else if (kind==="snap") S[Math.floor((N-1)/2)]=1;
+      return S;
+    }
+
+    // ---------- bar chart ----------
+    const chartBars = new Chart(document.getElementById("plotBars").getContext("2d"), {
+      data: {
+        labels: [],
+        datasets: [
+          { type:'bar', label:'Contribution factor  r̄ₙ', data:[], backgroundColor:[], borderColor:[], borderWidth:1, yAxisID:'y', order:2 },
+          { type:'line', label:'Cumulative  Σ r̄ₙ', data:[], borderColor:'#000', borderWidth:2, pointRadius:3, pointBackgroundColor:'#000', yAxisID:'y2', order:1, parsing:false }
+        ]
+      },
+      options: {
+        responsive:true, maintainAspectRatio:false, animation:false,
+        scales: {
+          x: { title:{display:true,text:'Mode number, n',color:'black',font:{size:14}}, ticks:{color:'black'}, grid:{display:false} },
+          y: { title:{display:true,text:'r̄ₙ  (fraction of static response)',color:'black',font:{size:13}}, ticks:{color:'black'}, grid:{color:'#eee'} },
+          y2:{ position:'right', min:0, max:1.05, title:{display:true,text:'cumulative Σ',color:'#000',font:{size:13}}, ticks:{color:'#000'}, grid:{drawOnChartArea:false} }
+        },
+        plugins: { legend:{display:true,position:'bottom',labels:{boxWidth:22,font:{size:12}}} },
+        layout: { padding: 8 }
+      },
+      plugins: [{
+        id:'unitLine',
+        afterDraw(chart){
+          const {ctx, chartArea:{left,right}, scales:{y2}}=chart;
+          const yp=y2.getPixelForValue(1);
+          ctx.save(); ctx.strokeStyle='#c0392b'; ctx.setLineDash([5,4]); ctx.lineWidth=1.2;
+          ctx.beginPath(); ctx.moveTo(left,yp); ctx.lineTo(right,yp); ctx.stroke();
+          ctx.fillStyle='#c0392b'; ctx.font='11px Arial'; ctx.textAlign='right';
+          ctx.fillText('exact total = 1', right-4, yp-4); ctx.restore();
+        }
+      }]
+    });
+
+    // ---------- deflected-shape canvas ----------
+    const bcanvas = document.getElementById("plotBldg");
+    const BW=270, BH=360;
+    const bctx = bcanvas.getContext("2d");
+    bctx.setTransform(bcanvas.width/BW,0,0,bcanvas.height/BH,0,0);
+
+    function drawBuilding() {
+      bctx.clearRect(0,0,BW,BH);
+      if (!state) return;
+      const {N, uExact, uJ, floor} = state;
+      const cx=BW/2-10, marginTop=26, marginBottom=40;
+      const yBase=BH-marginBottom, yRoof=marginTop;
+      const storyH=(yBase-yRoof)/N;
+      const maxPix=Math.min(BW/2-44, 92);
+      let ref=1e-12; for (let i=0;i<N;i++) ref=Math.max(ref,Math.abs(uExact[i]));
+      const scale=maxPix/ref;
+      const floorY=i=>yBase-(i+1)*storyH;
+
+      // ground
+      bctx.strokeStyle='#000'; bctx.lineWidth=1.5;
+      bctx.beginPath(); bctx.moveTo(cx-80,yBase); bctx.lineTo(cx+80,yBase); bctx.stroke();
+      bctx.strokeStyle='#999'; bctx.lineWidth=1;
+      for (let xx=cx-74;xx<=cx+80;xx+=11){ bctx.beginPath(); bctx.moveTo(xx,yBase); bctx.lineTo(xx-8,yBase+8); bctx.stroke(); }
+      // undeformed reference
+      bctx.strokeStyle='#ddd'; bctx.lineWidth=1; bctx.setLineDash([3,3]);
+      bctx.beginPath(); bctx.moveTo(cx,yBase); bctx.lineTo(cx,yRoof); bctx.stroke(); bctx.setLineDash([]);
+      // labels
+      bctx.fillStyle='#444'; bctx.font='10px Arial'; bctx.textAlign='left';
+      for (let i=0;i<N;i++) bctx.fillText((i+1===N)?'roof':'fl '+(i+1), cx+88, floorY(i)+3);
+
+      // exact shape (grey dashed)
+      bctx.strokeStyle='#999'; bctx.lineWidth=2; bctx.setLineDash([5,4]);
+      bctx.beginPath(); bctx.moveTo(cx,yBase);
+      for (let i=0;i<N;i++) bctx.lineTo(cx+uExact[i]*scale, floorY(i));
+      bctx.stroke(); bctx.setLineDash([]);
+      bctx.fillStyle='#999';
+      for (let i=0;i<N;i++){ bctx.beginPath(); bctx.arc(cx+uExact[i]*scale,floorY(i),2.5,0,TWO_PI); bctx.fill(); }
+
+      // J-mode approximation (blue)
+      bctx.strokeStyle='#1f3b73'; bctx.lineWidth=2.6;
+      bctx.beginPath(); bctx.moveTo(cx,yBase);
+      const xs=[];
+      for (let i=0;i<N;i++){ const x=cx+uJ[i]*scale; xs.push(x); bctx.lineTo(x,floorY(i)); }
+      bctx.stroke();
+      for (let i=0;i<N;i++){
+        const p={x:xs[i],y:floorY(i)};
+        bctx.fillStyle='#cdd9f0'; bctx.strokeStyle='#1f3b73'; bctx.lineWidth=1.2;
+        bctx.fillRect(p.x-16,p.y-5,32,10); bctx.strokeRect(p.x-16,p.y-5,32,10);
+      }
+      // observed floor ring
+      bctx.strokeStyle='#d62728'; bctx.lineWidth=2;
+      bctx.beginPath(); bctx.arc(xs[floor], floorY(floor), 9, 0, TWO_PI); bctx.stroke();
+    }
+
+    // ---------- floor selector ----------
+    function rebuildFloorSelect(N) {
+      const sel=document.getElementById("floor"); const prev=parseInt(sel.value);
+      sel.innerHTML="";
+      for (let i=N;i>=1;i--){ const o=document.createElement("option"); o.value=i;
+        o.textContent=(i===N)?`Floor ${i} (roof)`:(i===1?`Floor 1 (lowest)`:`Floor ${i}`); sel.appendChild(o); }
+      sel.value=(prev>=1&&prev<=N)?prev:N;
+    }
+
+    let lastN=-1;
+    const m=1.5, k=2400;   // fixed (factors are independent of magnitudes for given S shape)
+
+    function updatePlot() {
+      const N=parseInt(document.getElementById("N").value);
+      const Jslider=document.getElementById("J");
+      Jslider.max=N;
+      let J=Math.min(parseInt(Jslider.value), N); Jslider.value=J;
+
+      document.getElementById("N_val").textContent=N;
+      document.getElementById("J_val").textContent=J;
+
+      if (N!==lastN){ rebuildFloorSelect(N); lastN=N; }
+      const floor=Math.min(parseInt(document.getElementById("floor").value),N)-1;
+      const distKind=document.getElementById("dist").value;
+
+      const {omega, phi, K}=solveModes(N,m,k);
+      const S=spatialDist(distKind,N);
+
+      // modal participation Gamma_n and modal static displacement vectors
+      const Gamma=[], uModal=[];   // uModal[n][i] = phi[n][i]*Gamma_n/omega_n^2
+      for (let n=0;n<N;n++){
+        let mn=0,pn=0; for (let i=0;i<N;i++){ mn+=phi[n][i]*phi[n][i]*m; pn+=phi[n][i]*S[i]; }
+        const G=pn/mn; Gamma.push(G);
+        const row=[]; for (let i=0;i<N;i++) row.push(phi[n][i]*G/(omega[n]*omega[n])); uModal.push(row);
+      }
+      // exact static displacement
+      const uExact=solveLinear(K, S);
+
+      // contribution factors for displacement at observed floor
+      const rTot=uExact[floor];
+      const rbar=[]; for (let n=0;n<N;n++) rbar.push(uModal[n][floor]/rTot);
+
+      // J-mode reconstruction of full shape
+      const uJ=Array(N).fill(0);
+      for (let n=0;n<J;n++) for (let i=0;i<N;i++) uJ[i]+=uModal[n][i];
+
+      // cumulative & error
+      let cum=0; const cumArr=[]; for (let n=0;n<N;n++){ cum+=rbar[n]; cumArr.push({x:n,y:cum}); }
+      const captured=cumArr[J-1].y;
+      const errJ=1-captured;
+
+      document.getElementById("capVal").textContent=(captured*100).toFixed(1)+"%";
+      document.getElementById("errVal").textContent=(errJ*100).toFixed(1)+"%";
+      document.getElementById("capJ").textContent=J;
+
+      // bar chart
+      const labels=[], bars=[], bg=[], bd=[];
+      for (let n=0;n<N;n++){
+        labels.push((n+1).toString());
+        bars.push(rbar[n]);
+        const included=(n<J);
+        const col=MODE_COLORS[n];
+        bg.push(included? col : 'rgba(150,150,150,0.25)');
+        bd.push(included? col : 'rgba(150,150,150,0.6)');
+      }
+      chartBars.data.labels=labels;
+      chartBars.data.datasets[0].data=bars;
+      chartBars.data.datasets[0].backgroundColor=bg;
+      chartBars.data.datasets[0].borderColor=bd;
+      chartBars.data.datasets[1].data=cumArr;
+      // y range
+      let ymax=1, ymin=0;
+      for (const v of bars){ ymax=Math.max(ymax,v); ymin=Math.min(ymin,v); }
+      chartBars.options.scales.y.max=Math.max(1.05,ymax*1.1);
+      chartBars.options.scales.y.min=Math.min(0,ymin*1.1);
+      chartBars.update();
+
+      state={N, uExact, uJ, floor};
+      drawBuilding();
+    }
+
+    ["N","J","dist","floor"].forEach(id=>{
+      const el=document.getElementById(id);
+      el.addEventListener("input",updatePlot);
+      el.addEventListener("change",updatePlot);
+    });
+
+    rebuildFloorSelect(4);
+    updatePlot();
+  </script>
+</body>
+</html>

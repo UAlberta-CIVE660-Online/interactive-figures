@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Forced Vibration of an MDOF System: Modal Contributions, Summation, and Deflected Building</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+  body {
+    font-family: Arial, sans-serif;
+    margin: 20px;
+    background: #fff;
+    color: #000;
+  }
+
+  h2.fig-title { text-align: center; font-size: 18px; font-weight: bold; margin: 0 0 4px; }
+  p.fig-sub { text-align: center; font-size: 14px; color: #333; margin: 0 0 16px; max-width: 1000px; margin-left:auto; margin-right:auto; }
+
+  #constants, #controls {
+    display: flex; justify-content: center; align-items: center;
+    flex-wrap: wrap; gap: 30px; margin: 10px 0;
+  }
+  .constant, .control { display: flex; flex-direction: column; align-items: center; }
+
+  input[type="range"] { width: 220px; }
+
+  select {
+    text-align: center; border: 1px solid #ccc; border-radius: 4px; padding: 4px 6px;
+    background: #f9f9f9; color: #333; font-weight: bold; font-size: 14px;
+  }
+  input[type="text"] {
+    text-align: center; border: 1px solid #ccc; border-radius: 4px; padding: 4px;
+    width: 150px; background: #f9f9f9; color: #333; font-weight: bold;
+  }
+
+  #freqs {
+    display: flex; justify-content: center; align-items: stretch;
+    flex-wrap: wrap; gap: 12px; margin: 12px 0 4px;
+  }
+  .badge {
+    border: 1px solid #ccc; border-radius: 6px; padding: 6px 12px; font-size: 13px;
+    min-width: 150px; text-align: center; background: #f9f9f9;
+  }
+  .badge b { display: block; font-size: 13px; margin-bottom: 2px; color: #000; }
+
+  #plots {
+    display: flex; justify-content: center; align-items: flex-start;
+    flex-wrap: wrap; gap: 20px; margin-top: 10px;
+  }
+  .plotbox { flex: 1 1 400px; max-width: 480px; }
+  .plotbox h3 { text-align: center; font-size: 15px; margin: 0 0 4px; }
+  .legend-hint { text-align: center; font-size: 12px; font-style: italic; color: #666; margin: 6px 0 0; }
+
+  .chart-wrap { position: relative; width: 100%; height: 360px; }
+  canvas { display: block; background: #fff; }
+
+  .buildingbox { flex: 0 0 250px; max-width: 250px; }
+  .building-wrap { position: relative; width: 250px; height: 360px; margin: 0 auto; }
+  #plotBldg { width: 250px; height: 360px; }
+  .bldg-control { display: flex; flex-direction: column; align-items: center; margin-top: 8px; }
+  .bldg-control label { font-size: 13px; margin-bottom: 2px; }
+  .bldg-control input[type="range"] { width: 230px; }
+
+  #bldgLegend { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 12px; margin-top: 8px; }
+  .blegend-item { display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer; user-select: none; }
+  .blegend-item.hidden { opacity: 0.35; text-decoration: line-through; }
+  .blegend-swatch { display: inline-block; width: 20px; height: 0; border-top-width: 3px; border-top-style: solid; }
+
+  .hideable.off { display: none; }
+  </style>
+</head>
+<body>
+
+  <h2 class="fig-title">Forced Vibration of an MDOF System &mdash; Modal Expansion</h2>
+  <p class="fig-sub">
+    The structure is excited by a force <i>P</i>(t) = <b>S</b>&thinsp;p(t). Using modal analysis the response of each
+    floor is the sum of independent single-mode (SDOF) responses, each solved here with the Newmark-&beta; method.
+    The left panel shows each mode&rsquo;s contribution, the middle panel adds the modes one at a time, and the right
+    panel shows the deflected building at the instant set by its slider. Switch on damping to see the transient decay.
+  </p>
+
+  <!-- Sliders -->
+  <div id="controls">
+    <div class="control">
+      <label for="N" style="font-size:14px;">Number of storeys &nbsp; <i>N</i> = <span id="N_val">3</span></label>
+      <input type="range" id="N" min="2" max="5" step="1" value="3">
+    </div>
+    <div class="control">
+      <label for="mass" style="font-size:14px;">Floor mass &nbsp; <i>m</i> = <span id="mass_val">1.50</span> kg</label>
+      <input type="range" id="mass" min="0.5" max="3.0" step="0.05" value="1.50">
+    </div>
+    <div class="control">
+      <label for="stiff" style="font-size:14px;">Storey stiffness &nbsp; <i>k</i> = <span id="stiff_val">2400</span> N/m</label>
+      <input type="range" id="stiff" min="600" max="4000" step="50" value="2400">
+    </div>
+    <div class="control hideable" id="freqCtrl">
+      <label for="freq" style="font-size:14px;">Forcing ratio &nbsp; &Omega;/&omega;<sub>1</sub> = <span id="freq_val">0.90</span></label>
+      <input type="range" id="freq" min="0.1" max="3.0" step="0.02" value="0.90">
+    </div>
+    <div class="control hideable" id="zetaCtrl">
+      <label for="zeta" style="font-size:14px;">Damping ratio &nbsp; &zeta; = <span id="zeta_val">0.05</span></label>
+      <input type="range" id="zeta" min="0.01" max="0.30" step="0.01" value="0.05">
+    </div>
+  </div>
+
+  <!-- Selectors -->
+  <div id="constants">
+    <div class="constant">
+      <label for="forcing" style="font-size:14px;">Forcing type, p(t)</label>
+      <select id="forcing">
+        <option value="step" selected>Step force, p&#8320;</option>
+        <option value="harmonic">Harmonic, p&#8320; sin(&Omega;t)</option>
+      </select>
+    </div>
+    <div class="constant">
+      <label for="damp" style="font-size:14px;">Damping</label>
+      <select id="damp">
+        <option value="undamped" selected>Undamped</option>
+        <option value="damped">Damped (classical)</option>
+      </select>
+    </div>
+    <div class="constant">
+      <label for="dist" style="font-size:14px;">Force distribution, <b>S</b></label>
+      <select id="dist">
+        <option value="top" selected>Top floor only</option>
+        <option value="uniform">Uniform (all floors)</option>
+        <option value="triangular">Triangular (&uarr; with height)</option>
+      </select>
+    </div>
+    <div class="constant">
+      <label for="floor" style="font-size:14px;">Observed floor</label>
+      <select id="floor"></select>
+    </div>
+  </div>
+
+  <!-- Natural-frequency readouts -->
+  <div id="freqs"></div>
+
+  <!-- Plots -->
+  <div id="plots">
+    <div class="plotbox">
+      <h3>Individual modal contributions &nbsp;<span style="font-weight:normal;color:#555;">&phi;<sub>in</sub>&thinsp;q<sub>n</sub>(t)</span></h3>
+      <div class="chart-wrap"><canvas id="plotModal"></canvas></div>
+      <p class="legend-hint">Tip: click any label in the legend to show or hide that curve.</p>
+    </div>
+    <div class="plotbox">
+      <h3>Summation of modes &nbsp;<span style="font-weight:normal;color:#555;">&Sigma; builds to the total</span></h3>
+      <div class="chart-wrap"><canvas id="plotSum"></canvas></div>
+      <p class="legend-hint">Tip: click any label in the legend to show or hide that curve.</p>
+    </div>
+    <div class="plotbox buildingbox">
+      <h3>Deflected building at time <i>t</i></h3>
+      <div class="building-wrap"><canvas id="plotBldg" width="500" height="720"></canvas></div>
+      <div id="bldgLegend"></div>
+      <div class="bldg-control">
+        <label for="tslider">Time &nbsp; <i>t</i> = <span id="tlabel">0.000</span> s</label>
+        <input type="range" id="tslider" min="0" max="1000" step="1" value="0">
+      </div>
+      <p class="legend-hint">Click a legend item to show/hide it. Red ring = observed floor.</p>
+    </div>
+  </div>
+
+  <script>
+    Chart.defaults.devicePixelRatio = 2;
+    Chart.defaults.font.size = 13;
+
+    const TWO_PI = 2 * Math.PI;
+    const P0 = 100;                  // force amplitude (N)
+    const MODE_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e"];
+
+    let state = null;
+    let currentT = 0;
+    let frac = 0;
+    let modeVisible = [];
+    let totalVisible = true;
+
+    // ---------- Symmetric eigenproblem via Jacobi rotations ----------
+    function jacobiEig(Ain, n) {
+      const A = Ain.map(r => r.slice());
+      const V = Array.from({length:n}, (_,i) => Array.from({length:n}, (_,j) => i===j?1:0));
+      for (let sweep = 0; sweep < 100; sweep++) {
+        let off = 0;
+        for (let p = 0; p < n; p++)
+          for (let q = p+1; q < n; q++) off += A[p][q]*A[p][q];
+        if (off < 1e-20) break;
+        for (let p = 0; p < n; p++) {
+          for (let q = p+1; q < n; q++) {
+            if (Math.abs(A[p][q]) < 1e-18) continue;
+            const theta = (A[q][q] - A[p][p]) / (2 * A[p][q]);
+            let t = (theta === 0) ? 1
+                  : Math.sign(theta) / (Math.abs(theta) + Math.sqrt(theta*theta + 1));
+            const c = 1 / Math.sqrt(t*t + 1);
+            const s = t * c;
+            for (let i = 0; i < n; i++) { const aip=A[i][p], aiq=A[i][q]; A[i][p]=c*aip-s*aiq; A[i][q]=s*aip+c*aiq; }
+            for (let i = 0; i < n; i++) { const api=A[p][i], aqi=A[q][i]; A[p][i]=c*api-s*aqi; A[q][i]=s*api+c*aqi; }
+            for (let i = 0; i < n; i++) { const vip=V[i][p], viq=V[i][q]; V[i][p]=c*vip-s*viq; V[i][q]=s*vip+c*viq; }
+          }
+        }
+      }
+      return { values: A.map((r,i) => r[i]), vectors: V };
+    }
+
+    function stiffnessMatrix(N, k) {
+      const K = Array.from({length:N}, () => Array(N).fill(0));
+      for (let i = 0; i < N; i++) {
+        K[i][i] += k;
+        if (i + 1 < N) { K[i][i] += k; K[i][i+1] -= k; K[i+1][i] -= k; }
+      }
+      return K;
+    }
+
+    function solveModes(N, m, k) {
+      const K = stiffnessMatrix(N, k);
+      const { values, vectors } = jacobiEig(K, N);
+      const idx = values.map((_, j) => j).sort((a, b) => values[a] - values[b]);
+      const omega = [], phi = [];
+      for (const j of idx) {
+        const lam = Math.max(values[j], 0);
+        omega.push(Math.sqrt(lam / m));
+        const vec = [];
+        for (let i = 0; i < N; i++) vec.push(vectors[i][j]);
+        if (vec[N-1] < 0) for (let i = 0; i < N; i++) vec[i] = -vec[i];
+        phi.push(vec);
+      }
+      return { omega, phi };
+    }
+
+    function spatialDist(kind, N) {
+      const S = Array(N).fill(0);
+      if (kind === "top") { S[N-1] = 1; }
+      else if (kind === "uniform") { for (let i=0;i<N;i++) S[i]=1; }
+      else if (kind === "triangular") { for (let i=0;i<N;i++) S[i]=(i+1)/N; }
+      return S;
+    }
+
+    // ---------- Newmark-beta (average acceleration) for one modal SDOF ----------
+    // q'' + 2 zeta wn q' + wn^2 q = accel(t),  q(0)=q'(0)=0
+    function newmarkModal(wn, zeta, accelFn, tEnd, nstep) {
+      const dt = tEnd / nstep;
+      const g = 0.5, b = 0.25;
+      const c1 = 1/(b*dt*dt), c2 = 2*zeta*wn*g/(b*dt);
+      const keff = c1 + c2 + wn*wn;
+      const d1 = c1 + c2;
+      const d2 = 1/(b*dt) + 2*zeta*wn*(g/b - 1);
+      const d3 = 1/(2*b) - 1 - 2*zeta*wn*dt*(1 - g/(2*b));
+      let q = 0, v = 0, a = accelFn(0);
+      const out = new Float64Array(nstep + 1);
+      out[0] = 0;
+      for (let i = 1; i <= nstep; i++) {
+        const p = accelFn(i*dt);
+        const rhs = p + d1*q + d2*v + d3*a;
+        const qn = rhs / keff;
+        const anew = (qn - q)/(b*dt*dt) - v/(b*dt) - (1/(2*b) - 1)*a;
+        const vnew = v + dt*((1-g)*a + g*anew);
+        q = qn; v = vnew; a = anew;
+        out[i] = q;
+      }
+      return out;
+    }
+
+    // ---------- chart plugins ----------
+    const axesLines = {
+      id: 'axesLines',
+      afterDraw(chart) {
+        const { ctx, chartArea: { left, right, top, bottom }, scales: { x, y } } = chart;
+        ctx.save();
+        ctx.strokeStyle = 'black'; ctx.lineWidth = 1.2;
+        const yZero = y.getPixelForValue(0);
+        if (yZero >= top && yZero <= bottom) { ctx.beginPath(); ctx.moveTo(left, yZero); ctx.lineTo(right, yZero); ctx.stroke(); }
+        const xZero = x.getPixelForValue(0);
+        if (xZero >= left && xZero <= right) { ctx.beginPath(); ctx.moveTo(xZero, top); ctx.lineTo(xZero, bottom); ctx.stroke(); }
+        ctx.restore();
+      }
+    };
+
+    const timeMarker = {
+      id: 'timeMarker',
+      afterDatasetsDraw(chart) {
+        if (currentT == null) return;
+        const { ctx, chartArea: { left, right, top, bottom }, scales: { x } } = chart;
+        const px = x.getPixelForValue(currentT);
+        if (px < left || px > right) return;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 1.5; ctx.setLineDash([4,3]);
+        ctx.beginPath(); ctx.moveTo(px, top); ctx.lineTo(px, bottom); ctx.stroke();
+        ctx.restore();
+      }
+    };
+
+    function makeChart(canvasId, yTitle) {
+      return new Chart(document.getElementById(canvasId).getContext("2d"), {
+        type: "line",
+        data: { datasets: [] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          interaction: { mode: 'nearest', intersect: false },
+          scales: {
+            x: {
+              type: "linear", min: 0,
+              ticks: { color: "black" },
+              grid: { color: "#eee", drawBorder: false },
+              title: { display: true, text: "Time,  t  (s)", color: "black", font: { size: 14 } }
+            },
+            y: {
+              ticks: { color: "black" },
+              grid: { color: "#eee", drawBorder: false },
+              title: { display: true, text: yTitle, color: "black", font: { size: 14 } }
+            }
+          },
+          plugins: { legend: { display: true, position: 'bottom', labels: { boxWidth: 22, font: { size: 12 } } } },
+          layout: { padding: 8 }
+        },
+        plugins: [axesLines, timeMarker]
+      });
+    }
+
+    const chartModal = makeChart("plotModal", "Displacement of observed floor  (m)");
+    const chartSum   = makeChart("plotSum",   "Displacement of observed floor  (m)");
+
+    // ---------- building canvas ----------
+    const bcanvas = document.getElementById("plotBldg");
+    const BW = 250, BH = 360;
+    const bctx = bcanvas.getContext("2d");
+    bctx.setTransform(bcanvas.width / BW, 0, 0, bcanvas.height / BH, 0, 0);
+
+    function modeContribAt(n, i, idx) { return state.phi[n][i] * state.qFull[n][idx]; }
+    function floorDispIdx(i, idx) {
+      let s = 0;
+      for (let n = 0; n < state.N; n++) s += state.phi[n][i] * state.qFull[n][idx];
+      return s;
+    }
+
+    function drawBuilding(idx) {
+      bctx.clearRect(0, 0, BW, BH);
+      if (!state) return;
+      const { N, floorScaleRef } = state;
+      const cx = BW / 2, marginTop = 26, marginBottom = 40;
+      const yBase = BH - marginBottom, yRoof = marginTop;
+      const storyH = (yBase - yRoof) / N;
+      const maxPix = Math.min(BW / 2 - 36, 88);
+      const scale = floorScaleRef > 1e-12 ? maxPix / floorScaleRef : 0;
+      const floorY = i => yBase - (i + 1) * storyH;
+
+      // ground + hatching
+      bctx.strokeStyle = '#000'; bctx.lineWidth = 1.5;
+      bctx.beginPath(); bctx.moveTo(cx - 78, yBase); bctx.lineTo(cx + 78, yBase); bctx.stroke();
+      bctx.strokeStyle = '#999'; bctx.lineWidth = 1;
+      for (let xx = cx - 72; xx <= cx + 78; xx += 11) {
+        bctx.beginPath(); bctx.moveTo(xx, yBase); bctx.lineTo(xx - 8, yBase + 8); bctx.stroke();
+      }
+
+      // undeformed reference
+      bctx.strokeStyle = '#bbb'; bctx.lineWidth = 1; bctx.setLineDash([4, 4]);
+      bctx.beginPath(); bctx.moveTo(cx, yBase); bctx.lineTo(cx, yRoof); bctx.stroke();
+      bctx.setLineDash([]);
+
+      // floor labels
+      bctx.fillStyle = '#444'; bctx.font = '10px Arial'; bctx.textAlign = 'left';
+      for (let i = 0; i < N; i++) {
+        bctx.fillText((i + 1 === N) ? 'roof' : 'fl ' + (i + 1), cx + 82, floorY(i) + 3);
+      }
+
+      // force arrows (where S != 0) on left side
+      bctx.fillStyle = '#b8860b'; bctx.strokeStyle = '#b8860b'; bctx.lineWidth = 1.6;
+      for (let i = 0; i < N; i++) {
+        if (state.S[i] <= 1e-9) continue;
+        const len = 14 + 16 * state.S[i];
+        const y = floorY(i);
+        const x0 = cx - 28 - len, x1 = cx - 24;
+        bctx.beginPath(); bctx.moveTo(x0, y); bctx.lineTo(x1, y); bctx.stroke();
+        bctx.beginPath(); bctx.moveTo(x1, y); bctx.lineTo(x1 - 5, y - 3); bctx.lineTo(x1 - 5, y + 3); bctx.closePath(); bctx.fill();
+      }
+
+      // individual mode shapes at this time
+      for (let n = 0; n < N; n++) {
+        if (!modeVisible[n]) continue;
+        bctx.strokeStyle = MODE_COLORS[n]; bctx.lineWidth = 1.6; bctx.globalAlpha = 0.9;
+        bctx.beginPath(); bctx.moveTo(cx, yBase);
+        const xs = [];
+        for (let i = 0; i < N; i++) {
+          const xi = cx + modeContribAt(n, i, idx) * scale;
+          xs.push(xi); bctx.lineTo(xi, floorY(i));
+        }
+        bctx.stroke();
+        bctx.fillStyle = MODE_COLORS[n];
+        for (let i = 0; i < N; i++) { bctx.beginPath(); bctx.arc(xs[i], floorY(i), 2.5, 0, TWO_PI); bctx.fill(); }
+        bctx.globalAlpha = 1;
+      }
+
+      // total deflected building
+      if (totalVisible) {
+        const pts = [{ x: cx, y: yBase }];
+        for (let i = 0; i < N; i++) pts.push({ x: cx + floorDispIdx(i, idx) * scale, y: floorY(i) });
+
+        bctx.strokeStyle = '#1f3b73'; bctx.lineWidth = 2.5;
+        bctx.beginPath(); bctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) bctx.lineTo(pts[i].x, pts[i].y);
+        bctx.stroke();
+
+        for (let i = 0; i < N; i++) {
+          const p = pts[i + 1];
+          bctx.fillStyle = '#cdd9f0'; bctx.strokeStyle = '#1f3b73'; bctx.lineWidth = 1.2;
+          bctx.fillRect(p.x - 18, p.y - 5, 36, 10);
+          bctx.strokeRect(p.x - 18, p.y - 5, 36, 10);
+        }
+
+        const fobs = Math.min(parseInt(document.getElementById("floor").value), N) - 1;
+        const po = pts[fobs + 1];
+        bctx.strokeStyle = '#d62728'; bctx.lineWidth = 2;
+        bctx.beginPath(); bctx.arc(po.x, po.y, 9, 0, TWO_PI); bctx.stroke();
+      }
+    }
+
+    // ---------- clickable legend for the building panel ----------
+    function buildLegend(N) {
+      const leg = document.getElementById("bldgLegend");
+      leg.innerHTML = "";
+      const items = [];
+      for (let n = 0; n < N; n++) items.push({ key: "mode" + n, color: MODE_COLORS[n], label: "Mode " + (n + 1) });
+      items.push({ key: "total", color: "#1f3b73", label: "Total" });
+      items.forEach(it => {
+        const div = document.createElement("div");
+        div.className = "blegend-item";
+        div.dataset.key = it.key;
+        div.innerHTML = `<span class="blegend-swatch" style="border-top-color:${it.color};"></span>${it.label}`;
+        div.addEventListener("click", () => {
+          if (it.key === "total") totalVisible = !totalVisible;
+          else { const n = parseInt(it.key.slice(4)); modeVisible[n] = !modeVisible[n]; }
+          refreshLegendStyles();
+          drawBuilding(currentIdx());
+        });
+        leg.appendChild(div);
+      });
+      refreshLegendStyles();
+    }
+
+    function refreshLegendStyles() {
+      document.querySelectorAll("#bldgLegend .blegend-item").forEach(div => {
+        const key = div.dataset.key;
+        const hidden = (key === "total") ? !totalVisible : !modeVisible[parseInt(key.slice(4))];
+        div.classList.toggle("hidden", hidden);
+      });
+    }
+
+    // ---------- time slider ----------
+    const slider = document.getElementById("tslider");
+    const tlabel = document.getElementById("tlabel");
+    function currentIdx() {
+      if (!state) return 0;
+      return Math.round(frac * state.nstep);
+    }
+    function syncTime() {
+      if (!state) return;
+      const idx = currentIdx();
+      currentT = idx * state.dt;
+      tlabel.textContent = currentT.toFixed(3);
+      drawBuilding(idx);
+      chartModal.render();
+      chartSum.render();
+    }
+    slider.addEventListener("input", () => {
+      frac = parseInt(slider.value) / 1000;
+      syncTime();
+    });
+
+    // ---------- floor selector ----------
+    function rebuildFloorSelect(N) {
+      const sel = document.getElementById("floor");
+      const prev = parseInt(sel.value);
+      sel.innerHTML = "";
+      for (let i = N; i >= 1; i--) {
+        const opt = document.createElement("option");
+        opt.value = i;
+        opt.textContent = (i === N) ? `Floor ${i} (roof)` : (i === 1 ? `Floor 1 (lowest)` : `Floor ${i}`);
+        sel.appendChild(opt);
+      }
+      sel.value = (prev >= 1 && prev <= N) ? prev : N;
+    }
+
+    let lastN = -1;
+
+    function updatePlot() {
+      const N = parseInt(document.getElementById("N").value);
+      const m = parseFloat(document.getElementById("mass").value);
+      const k = parseFloat(document.getElementById("stiff").value);
+      const forcing = document.getElementById("forcing").value;
+      const dampMode = document.getElementById("damp").value;
+      const zeta = (dampMode === "damped") ? parseFloat(document.getElementById("zeta").value) : 0;
+      const distKind = document.getElementById("dist").value;
+      const ratio = parseFloat(document.getElementById("freq").value);
+
+      document.getElementById("N_val").textContent     = N;
+      document.getElementById("mass_val").textContent  = m.toFixed(2);
+      document.getElementById("stiff_val").textContent = k.toFixed(0);
+      document.getElementById("freq_val").textContent  = ratio.toFixed(2);
+      document.getElementById("zeta_val").textContent  = zeta.toFixed(2);
+
+      // show/hide conditional controls
+      document.getElementById("freqCtrl").classList.toggle("off", forcing !== "harmonic");
+      document.getElementById("zetaCtrl").classList.toggle("off", dampMode !== "damped");
+
+      if (N !== lastN) {
+        rebuildFloorSelect(N);
+        const nv = [];
+        for (let n = 0; n < N; n++) nv.push(modeVisible[n] !== undefined ? modeVisible[n] : true);
+        modeVisible = nv;
+        buildLegend(N);
+        lastN = N;
+      }
+
+      const floor = Math.min(parseInt(document.getElementById("floor").value), N) - 1;
+      const { omega, phi } = solveModes(N, m, k);
+      const S = spatialDist(distKind, N);
+
+      // modal scalars
+      const Mn = [], accelAmp = [];
+      for (let n = 0; n < N; n++) {
+        let mn = 0, pn = 0;
+        for (let i = 0; i < N; i++) { mn += phi[n][i]*phi[n][i]*m; pn += phi[n][i]*S[i]; }
+        Mn.push(mn);
+        accelAmp.push(P0 * pn / mn);   // coefficient multiplying g(t)
+      }
+
+      // forcing frequency
+      const Om = ratio * omega[0];
+
+      // time window & step
+      const T1 = TWO_PI / omega[0];
+      const Tmin = TWO_PI / omega[N-1];
+      const tEnd = (forcing === "step") ? 3 * T1 : 5 * T1;
+      let nstep = Math.ceil(tEnd / (Tmin / 40));
+      nstep = Math.max(800, Math.min(nstep, 6000));
+      const dt = tEnd / nstep;
+
+      // forcing function g(t)
+      const gFn = (forcing === "step") ? (t => 1) : (t => Math.sin(Om * t));
+
+      // integrate each modal SDOF with Newmark-beta
+      const qFull = [];
+      for (let n = 0; n < N; n++) {
+        const amp = accelAmp[n];
+        const accelFn = t => amp * gFn(t);
+        qFull.push(newmarkModal(omega[n], zeta, accelFn, tEnd, nstep));
+      }
+
+      // natural-frequency readouts
+      const fb = document.getElementById("freqs");
+      fb.innerHTML = "";
+      for (let n = 0; n < N; n++) {
+        const Tn = TWO_PI / omega[n];
+        const div = document.createElement("div");
+        div.className = "badge";
+        div.style.borderLeft = `6px solid ${MODE_COLORS[n]}`;
+        let extra = (forcing === "harmonic") ? `<br>&Omega;/&omega;<sub>${n+1}</sub> = ${(Om/omega[n]).toFixed(2)}` : "";
+        div.innerHTML = `<b>Mode ${n+1}</b>&omega;<sub>${n+1}</sub> = ${omega[n].toFixed(2)} rad/s<br>T<sub>${n+1}</sub> = ${Tn.toFixed(3)} s${extra}`;
+        fb.appendChild(div);
+      }
+
+      // chart series (downsample to ~900 pts for plotting)
+      const stride = Math.max(1, Math.floor(nstep / 900));
+      const modalData = Array.from({length:N}, () => []);
+      const partialData = Array.from({length:N}, () => []);
+      const totalData = [];
+      for (let s = 0; s <= nstep; s += stride) {
+        const t = s * dt;
+        let running = 0;
+        for (let n = 0; n < N; n++) {
+          const contrib = phi[n][floor] * qFull[n][s];
+          modalData[n].push({ x: t, y: contrib });
+          running += contrib;
+          partialData[n].push({ x: t, y: running });
+        }
+        totalData.push({ x: t, y: running });
+      }
+
+      // left chart
+      const modalSets = [];
+      for (let n = 0; n < N; n++) {
+        modalSets.push({ label: `Mode ${n+1}`, data: modalData[n],
+          borderColor: MODE_COLORS[n], borderWidth: 1.8, pointRadius: 0, fill: false, parsing: false });
+      }
+      modalSets.push({ label: "Total (all modes)", data: totalData,
+        borderColor: "#000", borderWidth: 1.4, borderDash: [6,6], pointRadius: 0, fill: false, parsing: false });
+      chartModal.data.datasets = modalSets;
+
+      // middle chart
+      const sumSets = [];
+      for (let n = 0; n < N; n++) {
+        const isLast = (n === N - 1);
+        let label = (n === 0) ? "Mode 1 only" : (isLast ? "All modes (total)" : `Modes 1–${n+1}`);
+        sumSets.push({ label, data: partialData[n],
+          borderColor: isLast ? "#000" : MODE_COLORS[n],
+          borderWidth: isLast ? 2.4 : 1.6, borderDash: isLast ? [] : [4,3],
+          pointRadius: 0, fill: false, parsing: false });
+      }
+      chartSum.data.datasets = sumSets;
+
+      chartModal.options.scales.x.max = tEnd;
+      chartSum.options.scales.x.max = tEnd;
+
+      let ymax = 0;
+      for (const p of totalData) ymax = Math.max(ymax, Math.abs(p.y));
+      for (const series of modalData) for (const p of series) ymax = Math.max(ymax, Math.abs(p.y));
+      ymax = Math.max(ymax, 1e-9) * 1.1;
+      for (const ch of [chartModal, chartSum]) { ch.options.scales.y.min = -ymax; ch.options.scales.y.max = ymax; }
+
+      // building displacement scale reference (max |floor disp| over time)
+      let floorScaleRef = 1e-12;
+      for (let s = 0; s <= nstep; s += stride) {
+        for (let i = 0; i < N; i++) {
+          let d = 0; for (let n = 0; n < N; n++) d += phi[n][i]*qFull[n][s];
+          if (Math.abs(d) > floorScaleRef) floorScaleRef = Math.abs(d);
+        }
+      }
+
+      state = { N, m, k, omega, phi, S, qFull, tEnd, dt, nstep, floorScaleRef };
+
+      chartModal.update();
+      chartSum.update();
+      syncTime();
+    }
+
+    ["N", "mass", "stiff", "freq", "zeta", "forcing", "damp", "dist", "floor"].forEach(id => {
+      const el = document.getElementById(id);
+      el.addEventListener("input", updatePlot);
+      el.addEventListener("change", updatePlot);
+    });
+
+    rebuildFloorSelect(3);
+    updatePlot();
+  </script>
+</body>
+</html>
